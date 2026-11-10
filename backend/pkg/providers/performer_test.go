@@ -540,31 +540,6 @@ func TestPerformer_OnlyModelFailuresAreMarkedAsOptionalRefinerFailures(t *testin
 	})
 }
 
-func TestPerformer_AnEmptyGeneratorPlanMustBeExplicit(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		args    string
-		wantErr bool
-	}{
-		{"an explicit empty plan", `{"subtasks":[],"message":"one step"}`, false},
-		{"a quoted empty plan", `{"subtasks":"[]","message":"one step"}`, false},
-		{"a missing plan", `{"message":"one step"}`, true},
-		{"a null plan", `{"subtasks":null,"message":"one step"}`, true},
-		{"malformed arguments", `{`, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			list, err := decodeGeneratorSubtaskList(json.RawMessage(tc.args))
-			if tc.wantErr {
-				require.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
-			assert.NotNil(t, list.Subtasks, "only an actual empty array may become an executable fallback")
-			assert.Empty(t, list.Subtasks)
-		})
-	}
-}
-
 func (p *performerFailingProvider) Type() provider.ProviderType { return provider.ProviderOpenAI }
 
 func (p *performerFailingProvider) CallWithTools(

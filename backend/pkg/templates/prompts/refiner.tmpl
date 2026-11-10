@@ -214,8 +214,11 @@ Instead of regenerating all subtasks, submit ONLY the changes needed using the "
   - Requires: `id` (the subtask ID to move)
   - Optional: `after_id` (move after this subtask ID; null/0 = move to beginning)
 
+**Skill steps (protected):**
+A planned subtask whose description starts with `[skill-step]` is a step of the skill the user selected. Never `remove` or `reorder` it; such operations are discarded. You may `modify` it to add findings or adjust its approach — keep the first `[skill-step]` line unchanged — and you may `add` new subtasks before, between or after skill steps.
+
 **Task Completion:**
-To signal that the task is complete, remove all remaining planned subtasks.
+To signal that the task is complete, remove all remaining planned subtasks that are not skill steps.
 
 **Examples:**
 - Remove completed subtask 42, add a new one after subtask 45:

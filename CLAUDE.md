@@ -56,7 +56,7 @@ After editing the schema, regenerate: `gqlgen`, then `swag init` — the swagger
 
 ## Project Overview
 
-**PentAGI** is an automated security testing platform powered by AI agents. A `primary_agent` drives a flow, a `generator`/`refiner` pair plans and re-plans its subtasks, and specialist agents — `pentester`, `coder`, `searcher`, `installer`, `memorist`, `adviser`, `reflector`, `enricher`, `reporter`, `summarizer`, `assistant`, `tool_call_fixer` — execute them against LLM providers, Docker-sandboxed tools and a pgvector memory store. The authoritative list of roles is the `MsgchainType` enum in `backend/pkg/database/models.go`, mirrored as `AgentType` in the GraphQL schema.
+**PentAGI** is an automated security testing platform powered by AI agents. A `primary_agent` drives a flow, subtasks are planned by code (`backend/pkg/providers/planner.go`: one subtask per Workflow step of a skill invoked as `/<skill-name>`, otherwise one subtask for the whole message) and re-planned by the `refiner`, and specialist agents — `pentester`, `coder`, `searcher`, `installer`, `memorist`, `adviser`, `reflector`, `enricher`, `reporter`, `summarizer`, `assistant`, `tool_call_fixer` — execute them against LLM providers, Docker-sandboxed tools and a pgvector memory store. The authoritative list of roles is the `MsgchainType` enum in `backend/pkg/database/models.go`, mirrored as `AgentType` in the GraphQL schema.
 
 The application is a monorepo:
 
@@ -216,7 +216,7 @@ Server state comes from **Apollo Client 4** (note the v4 import paths, `@apollo/
 
 1. A user creates a "flow" — the UI calls the GraphQL `createFlow` mutation; REST is the programmatic equivalent.
 2. `CreateFlow` (`pkg/controller/flows.go`) reserves the row and builds the worker asynchronously; there is no queue, and a build failure marks the flow `failed` and says so on its message log.
-3. The `primary_agent` decomposes the flow into tasks; the `generator` produces each task's subtasks and the `refiner` re-plans after every completed one. Subtasks run one at a time and delegate to the specialist agents.
+3. Each user message becomes a task. Its subtasks come from code, not a model: a message starting with `/<skill-name>` is planned as one subtask per step of that skill's numbered Workflow (skills are read from `SKILLS_DIR` by `backend/pkg/skills` and copied into the container at `/work/skills`); any other message is one subtask. The `refiner` re-plans after every completed subtask but may not remove or reorder a subtask marked `[skill-step]`. Subtasks run one at a time and delegate to the specialist agents. The `generator` role remains only as a stored value (`MsgchainType`, prompt types, provider configs) for existing data; no code runs it.
 4. Those agents call tools — terminal, file, browser, search — inside per-flow Docker containers.
 5. Results, tool output and LLM reasoning land in PostgreSQL (pgvector for semantic memory).
 6. Progress reaches the UI through GraphQL subscriptions fed by `pkg/graph/subscriptions`.

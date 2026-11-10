@@ -1370,9 +1370,9 @@ func (fw *flowWorker) processInput(flin flowInput) (TaskWorker, error) {
 	_ = fw.SetStatus(fw.ctx, database.FlowStatusRunning)
 
 	// Pre-create the per-task cancellable context BEFORE calling CreateTask.
-	// GenerateSubtasks (an LLM call) runs synchronously inside CreateTask and may take
-	// many seconds. Without this, a concurrent Stop() would invoke a no-op taskST and
-	// find taskWG at zero—reporting success while the generator is still running.
+	// CreateTask makes an LLM call (the task title) synchronously and may take many
+	// seconds. Without this, a concurrent Stop() would invoke a no-op taskST and find
+	// taskWG at zero—reporting success while that call is still running.
 	fw.taskMX.Lock()
 	fw.taskST()
 	ctx, taskST := context.WithCancel(fw.ctx)

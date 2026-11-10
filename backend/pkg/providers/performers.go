@@ -93,99 +93,6 @@ func (fp *flowProvider) performTaskResultReporter(
 	return &taskResult, nil
 }
 
-func (fp *flowProvider) performSubtasksGenerator(
-	ctx context.Context,
-	taskID int64,
-	systemGeneratorTmpl, userGeneratorTmpl, input string,
-) ([]tools.SubtaskInfo, error) {
-	var (
-		subtaskList  tools.SubtaskList
-		msgChainType = database.MsgchainTypeGenerator
-		optAgentType = agentByChain[msgChainType]
-	)
-
-	chain := []llms.MessageContent{
-		llms.TextParts(llms.ChatMessageTypeSystem, systemGeneratorTmpl),
-		llms.TextParts(llms.ChatMessageTypeHuman, userGeneratorTmpl),
-	}
-
-	memorist, err := fp.GetMemoristHandler(ctx, &taskID, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get memorist handler: %w", err)
-	}
-
-	searcher, err := fp.GetTaskSearcherHandler(ctx, taskID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get searcher handler: %w", err)
-	}
-
-	ctx = tools.PutAgentContext(ctx, msgChainType)
-	cfg := tools.GeneratorExecutorConfig{
-		TaskID:   taskID,
-		Memorist: memorist,
-		Searcher: searcher,
-		SubtaskList: func(ctx context.Context, name string, args json.RawMessage) (string, error) {
-			decoded, err := decodeGeneratorSubtaskList(args)
-			if err != nil {
-				return "", err
-			}
-			subtaskList = decoded
-			return "subtask list successfully processed", nil
-		},
-	}
-	executor, err := fp.executor.GetGeneratorExecutor(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get generator executor: %w", err)
-	}
-
-	chainBlob, err := json.Marshal(chain)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal msg chain: %w", err)
-	}
-
-	msgChain, err := fp.db.CreateMsgChain(ctx, database.CreateMsgChainParams{
-		Type:          msgChainType,
-		Model:         fp.Model(optAgentType),
-		ModelProvider: string(fp.Type()),
-		Chain:         chainBlob,
-		FlowID:        fp.flowID,
-		TaskID:        database.Int64ToNullInt64(&taskID),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create msg chain: %w", err)
-	}
-
-	err = fp.performAgentChain(ctx, optAgentType, msgChain.ID, &taskID, nil, chain, executor, fp.summarizer)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get subtasks generator result: %w", err)
-	}
-
-	if agentCtx, ok := tools.GetAgentContext(ctx); ok {
-		_, _ = fp.putAgentLog(
-			ctx,
-			agentCtx.ParentAgentType,
-			agentCtx.CurrentAgentType,
-			input,
-			fp.subtasksToMarkdown(subtaskList.Subtasks),
-			&taskID,
-			nil,
-		)
-	}
-
-	return subtaskList.Subtasks, nil
-}
-
-func decodeGeneratorSubtaskList(args json.RawMessage) (tools.SubtaskList, error) {
-	var list tools.SubtaskList
-	if err := json.Unmarshal(args, &list); err != nil {
-		return list, fmt.Errorf("failed to unmarshal subtask list: %w", err)
-	}
-	if list.Subtasks == nil {
-		return list, fmt.Errorf("failed to unmarshal subtask list: subtasks array is missing")
-	}
-	return list, nil
-}
-
 func (fp *flowProvider) performSubtasksRefiner(
 	ctx context.Context,
 	taskID int64,
@@ -260,22 +167,10 @@ func (fp *flowProvider) performSubtasksRefiner(
 		Type:   msgChainType,
 	})
 	if err != nil || isEmptyChain(msgChain.Chain) {
-		// fallback to generator chain if refiner chain is not found or empty
-		msgChain, err = fp.db.GetFlowTaskTypeLastMsgChain(ctx, database.GetFlowTaskTypeLastMsgChainParams{
-			FlowID: fp.flowID,
-			TaskID: database.Int64ToNullInt64(&taskID),
-			Type:   database.MsgchainTypeGenerator,
-		})
-		if err != nil || isEmptyChain(msgChain.Chain) {
-			// is unexpected, but we should fallback to empty chain
-			chain = []llms.MessageContent{
-				llms.TextParts(llms.ChatMessageTypeSystem, systemRefinerTmpl),
-				llms.TextParts(llms.ChatMessageTypeHuman, userRefinerTmpl),
-			}
-		} else {
-			if chain, err = restoreChain(msgChain.Chain); err != nil {
-				return nil, fmt.Errorf("failed to restore chain from generator state: %w", err)
-			}
+		// First refinement of a task: plans are made by code, so there is no planner conversation to continue.
+		chain = []llms.MessageContent{
+			llms.TextParts(llms.ChatMessageTypeSystem, systemRefinerTmpl),
+			llms.TextParts(llms.ChatMessageTypeHuman, userRefinerTmpl),
 		}
 	} else {
 		if chain, err = restoreChain(msgChain.Chain); err != nil {
@@ -345,11 +240,25 @@ func (fp *flowProvider) performSubtasksRefiner(
 		return nil, fmt.Errorf("failed to get subtasks refiner result: %w", err)
 	}
 
+	subtaskPatch, dropped := protectSkillSteps(plannedSubtasks, subtaskPatch)
+	for _, op := range dropped {
+		logger.WithFields(logrus.Fields{"op": op.Op, "subtask_id": op.ID}).Warn("refiner tried to remove or reorder a skill step; operation dropped")
+	}
+
 	// Apply the patch operations to the planned subtasks
 	result, err := applySubtaskOperations(plannedSubtasks, subtaskPatch, logger)
 	if err != nil {
 		logger.WithError(err).Error("failed to apply subtask operations")
 		return nil, fmt.Errorf("failed to apply subtask operations: %w", err)
+	}
+
+	if !skillStepsIntact(plannedSubtasks, result) {
+		// Unreachable with the filter above unless applySubtaskOperations changes; keep the plan rather than lose a skill step.
+		logger.Error("refined plan lost or reordered a skill step; keeping the previous plan")
+		result, err = applySubtaskOperations(plannedSubtasks, tools.SubtaskPatch{Operations: tools.SubtaskOperations{}}, logger)
+		if err != nil {
+			return nil, fmt.Errorf("failed to rebuild the previous plan: %w", err)
+		}
 	}
 
 	logger.WithFields(logrus.Fields{

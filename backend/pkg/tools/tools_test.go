@@ -713,24 +713,6 @@ func toolsAgentExecutorCases() ([]toolsAgentExecutorCase, func(ExecutorHandler) 
 			task:     task, subtask: subtask,
 		},
 		{
-			factory: "GetGeneratorExecutor",
-			build: func(fte *flowToolsExecutor, _ bool, without string) (ContextToolsExecutor, error) {
-				return fte.GetGeneratorExecutor(toolsWithout(GeneratorExecutorConfig{
-					TaskID:      task,
-					SubtaskList: h("SubtaskList"), Memorist: h("Memorist"), Searcher: h("Searcher"),
-				}, without))
-			},
-			tools: map[string]string{
-				"subtask_list": "SubtaskList", "memorist": "Memorist", "search": "Searcher",
-				"terminal": "", "file": "", "browser": "",
-			},
-			optional: []string{"browser"},
-			barriers: []string{"subtask_list"},
-			required: []string{"SubtaskList", "Memorist"},
-			sandbox:  true,
-			task:     task,
-		},
-		{
 			factory: "GetRefinerExecutor",
 			build: func(fte *flowToolsExecutor, _ bool, without string) (ContextToolsExecutor, error) {
 				return fte.GetRefinerExecutor(toolsWithout(RefinerExecutorConfig{

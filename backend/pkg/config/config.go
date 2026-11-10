@@ -23,6 +23,9 @@ type Config struct {
 	Debug   bool   `env:"DEBUG" envDefault:"false"`
 	DataDir string `env:"DATA_DIR" envDefault:"./data"`
 	AskUser bool   `env:"ASK_USER" envDefault:"false"`
+	// SkillsDir holds one folder per skill (each with a SKILL.md). Empty disables skill-driven
+	// planning: every task then runs as a single subtask.
+	SkillsDir string `env:"SKILLS_DIR"`
 
 	// TenantID namespaces every externally-visible artifact this instance creates
 	// (PostgreSQL schema, docker object names, Graphiti group ids, telemetry identity)

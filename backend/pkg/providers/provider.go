@@ -36,10 +36,9 @@ const ToolPlaceholder = "Execute operations via function invocation - textual re
 const TasksNumberLimit = 15
 
 const (
-	msgGeneratorSizeLimit = 150 * 1024 // 150 KB
-	msgRefinerSizeLimit   = 100 * 1024 // 100 KB
-	msgReporterSizeLimit  = 100 * 1024 // 100 KB
-	msgSummarizerLimit    = 32 * 1024  // 32 KB
+	msgRefinerSizeLimit  = 100 * 1024 // 100 KB
+	msgReporterSizeLimit = 100 * 1024 // 100 KB
+	msgSummarizerLimit   = 32 * 1024  // 32 KB
 )
 
 const textTruncateMessage = "\n\n[...truncated]"
@@ -348,89 +347,6 @@ func (fp *flowProvider) GetTaskTitle(ctx context.Context, input string) (string,
 	)
 
 	return title, nil
-}
-
-func (fp *flowProvider) GenerateSubtasks(ctx context.Context, taskID int64) ([]tools.SubtaskInfo, error) {
-	ctx, span := obs.Observer.NewSpan(ctx, obs.SpanKindInternal, "providers.flowProvider.GenerateSubtasks")
-	defer span.End()
-
-	logger := logrus.WithContext(ctx).WithField("task_id", taskID)
-
-	tasksInfo, err := fp.getTasksInfo(ctx, taskID)
-	if err != nil {
-		logger.WithError(err).Error("failed to get tasks info")
-		return nil, fmt.Errorf("failed to get tasks info: %w", err)
-	}
-
-	generatorContext := map[string]map[string]any{
-		"user": {
-			"Task":     tasksInfo.Task,
-			"Tasks":    tasksInfo.Tasks,
-			"Subtasks": tasksInfo.Subtasks,
-		},
-		"system": {
-			"SubtaskListToolName":     tools.SubtaskListToolName,
-			"SearchToolName":          tools.SearchToolName,
-			"TerminalToolName":        tools.TerminalToolName,
-			"FileToolName":            tools.FileToolName,
-			"BrowserToolName":         tools.BrowserToolName,
-			"SummarizationToolName":   cast.SummarizationToolName,
-			"SummarizedContentPrefix": strings.ReplaceAll(csum.SummarizedContentPrefix, "\n", "\\n"),
-			"DockerImage":             fp.image,
-			"Cwd":                     docker.WorkFolderPathInContainer,
-			"Lang":                    fp.language,
-			"CurrentTime":             getCurrentTime(),
-			"N":                       TasksNumberLimit,
-			"ToolPlaceholder":         ToolPlaceholder,
-			"UserFiles":               fp.userFilesListing(),
-		},
-	}
-
-	ctx, observation := obs.Observer.NewObservation(ctx)
-	generatorEvaluator := observation.Evaluator(
-		langfuse.WithEvaluatorName("subtasks generator"),
-		langfuse.WithEvaluatorInput(tasksInfo),
-		langfuse.WithEvaluatorMetadata(langfuse.Metadata{
-			"user_context":   generatorContext["user"],
-			"system_context": generatorContext["system"],
-		}),
-	)
-	ctx, _ = generatorEvaluator.Observation(ctx)
-
-	generatorTmpl, err := fp.prompter.RenderTemplate(templates.PromptTypeSubtasksGenerator, generatorContext["user"])
-	if err != nil {
-		return nil, wrapErrorEndEvaluatorSpan(ctx, generatorEvaluator, "failed to get task generator template", err)
-	}
-
-	subtasksLen := len(tasksInfo.Subtasks)
-	for l := subtasksLen; l > 2; l /= 2 {
-		if len(generatorTmpl) < msgGeneratorSizeLimit {
-			break
-		}
-
-		generatorContext["user"]["Subtasks"] = tasksInfo.Subtasks[(subtasksLen - l):]
-		generatorTmpl, err = fp.prompter.RenderTemplate(templates.PromptTypeSubtasksGenerator, generatorContext["user"])
-		if err != nil {
-			return nil, wrapErrorEndEvaluatorSpan(ctx, generatorEvaluator, "failed to get task generator template", err)
-		}
-	}
-
-	systemGeneratorTmpl, err := fp.prompter.RenderTemplate(templates.PromptTypeGenerator, generatorContext["system"])
-	if err != nil {
-		return nil, wrapErrorEndEvaluatorSpan(ctx, generatorEvaluator, "failed to get task system generator template", err)
-	}
-
-	subtasks, err := fp.performSubtasksGenerator(ctx, taskID, systemGeneratorTmpl, generatorTmpl, tasksInfo.Task.Input)
-	if err != nil {
-		return nil, wrapErrorEndEvaluatorSpan(ctx, generatorEvaluator, "failed to perform subtasks generator", err)
-	}
-
-	generatorEvaluator.End(
-		langfuse.WithEvaluatorStatus("success"),
-		langfuse.WithEvaluatorOutput(subtasks),
-	)
-
-	return subtasks, nil
 }
 
 func (fp *flowProvider) RefineSubtasks(ctx context.Context, taskID int64) ([]tools.SubtaskInfo, error) {

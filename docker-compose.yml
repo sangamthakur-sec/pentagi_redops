@@ -37,6 +37,7 @@ services:
     environment:
       - DEBUG=${DEBUG:-false}
       - DATA_DIR=${DATA_DIR:-}
+      - SKILLS_DIR=${SKILLS_DIR:-}
       - DOCKER_GID=998
       - CORS_ORIGINS=${CORS_ORIGINS:-}
       - TRUSTED_PROXIES=${TRUSTED_PROXIES:-}

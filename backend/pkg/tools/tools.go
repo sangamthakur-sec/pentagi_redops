@@ -287,13 +287,6 @@ type SearcherExecutorConfig struct {
 	Summarizer   SummarizeHandler
 }
 
-type GeneratorExecutorConfig struct {
-	TaskID      int64
-	Memorist    ExecutorHandler
-	Searcher    ExecutorHandler
-	SubtaskList ExecutorHandler
-}
-
 type RefinerExecutorConfig struct {
 	TaskID       int64
 	Memorist     ExecutorHandler
@@ -346,7 +339,6 @@ type FlowToolsExecutor interface {
 	GetCoderExecutor(cfg CoderExecutorConfig) (ContextToolsExecutor, error)
 	GetPentesterExecutor(cfg PentesterExecutorConfig) (ContextToolsExecutor, error)
 	GetSearcherExecutor(cfg SearcherExecutorConfig) (ContextToolsExecutor, error)
-	GetGeneratorExecutor(cfg GeneratorExecutorConfig) (ContextToolsExecutor, error)
 	GetRefinerExecutor(cfg RefinerExecutorConfig) (ContextToolsExecutor, error)
 	GetMemoristExecutor(cfg MemoristExecutorConfig) (ContextToolsExecutor, error)
 	GetEnricherExecutor(cfg EnricherExecutorConfig) (ContextToolsExecutor, error)
@@ -544,6 +536,9 @@ func (fte *flowToolsExecutor) Prepare(ctx context.Context) error {
 }
 
 // fileSyncEntry maps a local host file to its expected path inside the container.
+// SkillsDirName is the folder under /work that holds the skills library inside a flow container.
+const SkillsDirName = "skills"
+
 type fileSyncEntry struct {
 	localPath     string // absolute path on host
 	containerPath string // absolute path in container, e.g. /work/uploads/file.txt
@@ -595,6 +590,20 @@ func (fte *flowToolsExecutor) collectSyncEntries() ([]fileSyncEntry, error) {
 		return nil, fmt.Errorf("failed to collect resources: %w", err)
 	} else {
 		entries = append(entries, resourcesEntries...)
+	}
+
+	// Skills land in /work/skills so agents can open the files a skill step names. They are
+	// deliberately outside uploads/ and resources/, whose every path is listed in agent prompts.
+	if fte.cfg != nil && fte.cfg.SkillsDir != "" {
+		skillsDir, err := filepath.Abs(fte.cfg.SkillsDir)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve skills directory: %w", err)
+		}
+		if skillEntries, err := collectFileSyncEntries(skillsDir, SkillsDirName); err != nil {
+			return nil, fmt.Errorf("failed to collect skills: %w", err)
+		} else {
+			entries = append(entries, skillEntries...)
+		}
 	}
 
 	return entries, nil
@@ -1499,76 +1508,6 @@ func (fte *flowToolsExecutor) GetSearcherExecutor(cfg SearcherExecutorConfig) (C
 		ce.definitions = append(ce.definitions, registryDefinitions[StoreAnswerToolName])
 		ce.handlers[SearchAnswerToolName] = search.Handle
 		ce.handlers[StoreAnswerToolName] = search.Handle
-	}
-
-	return ce, nil
-}
-
-func (fte *flowToolsExecutor) GetGeneratorExecutor(cfg GeneratorExecutorConfig) (ContextToolsExecutor, error) {
-	if cfg.SubtaskList == nil {
-		return nil, fmt.Errorf("subtask list handler is required")
-	}
-
-	if cfg.Memorist == nil {
-		return nil, fmt.Errorf("memorist handler is required")
-	}
-
-	container, err := fte.db.GetFlowPrimaryContainer(context.Background(), fte.flowID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get container %d: %w", fte.flowID, err)
-	}
-
-	term := NewTerminalTool(
-		fte.flowID,
-		&cfg.TaskID,
-		nil,
-		container.ID,
-		container.LocalID.String,
-		fte.cfg.TenantPrefix(),
-		fte.docker,
-		fte.tlp,
-		time.Duration(fte.cfg.TerminalToolTimeout)*time.Second,
-	)
-
-	ce := &customExecutor{
-		userID:   fte.userID,
-		flowID:   fte.flowID,
-		taskID:   &cfg.TaskID,
-		mlp:      fte.mlp,
-		tclp:     fte.tclp,
-		replacer: fte.replacer,
-		vslp:     fte.vslp,
-		db:       fte.db,
-		store:    fte.store,
-		definitions: []llms.FunctionDefinition{
-			registryDefinitions[MemoristToolName],
-			registryDefinitions[SearchToolName],
-			registryDefinitions[SubtaskListToolName],
-			registryDefinitions[TerminalToolName],
-			registryDefinitions[FileToolName],
-		},
-		handlers: map[string]ExecutorHandler{
-			MemoristToolName:    cfg.Memorist,
-			SearchToolName:      cfg.Searcher,
-			SubtaskListToolName: cfg.SubtaskList,
-			TerminalToolName:    term.Handle,
-			FileToolName:        term.Handle,
-		},
-		barriers: map[string]struct{}{SubtaskListToolName: {}},
-	}
-
-	browser := NewBrowserTool(
-		fte.flowID,
-		&cfg.TaskID,
-		nil,
-		fte.cfg.DataDir,
-		fte.cfg.ScraperPrivateURL,
-		fte.cfg.ScraperPublicURL,
-		fte.scp,
-	)
-	if browser.IsAvailable() {
-		ce.definitions = append(ce.definitions, registryDefinitions[BrowserToolName])
-		ce.handlers[BrowserToolName] = browser.Handle
 	}
 
 	return ce, nil
